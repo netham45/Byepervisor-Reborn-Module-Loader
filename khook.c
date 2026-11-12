@@ -1,4 +1,6 @@
 #include "khook.h"
+#include <ps5/kernel.h>
+#include <string.h>
 
 static int kwrite_q(khook_t *kh, uint64_t addr, uint64_t val)
 {
@@ -69,16 +71,40 @@ int kh_chain_q(kh_chain_t *chain, uint64_t raw)
 
 int kh_chain_g(kh_chain_t *chain, kgadget_t gadget)
 {
-  return kh_chain_q(chain, kgadget(gadget));
+  uint64_t addr = kgadget(gadget);
+  if (!addr) {
+    if (chain)
+      chain->err = 1;
+    return -1;
+  }
+  return kh_chain_q(chain, addr);
 }
 
 int kh_chain_store(kh_chain_t *chain, uint64_t kaddr, uint64_t val)
 {
+  if ((kernel_get_fw_version() & 0xffff0000) == 0x10600000) {
+    if (kaddr < 8)
+      return -1;
+    kh_chain_g(chain, KERNEL_GADGET_POP_RDI);
+    kh_chain_q(chain, kaddr - 8);
+    kh_chain_g(chain, KERNEL_GADGET_POP_RCX);
+    kh_chain_q(chain, val);
+    kh_chain_g(chain, KERNEL_GADGET_STORE_RDI8_RCX);
+  } else {
+    kh_chain_g(chain, KERNEL_GADGET_POP_RCX);
+    kh_chain_q(chain, kaddr);
+    kh_chain_g(chain, KERNEL_GADGET_POP_R8);
+    kh_chain_q(chain, val);
+    kh_chain_g(chain, KERNEL_GADGET_STORE_RCX_R8);
+  }
+  return chain && !chain->err ? 0 : -1;
+}
+
+int kh_chain_store_rax(kh_chain_t *chain, uint64_t kaddr)
+{
   kh_chain_g(chain, KERNEL_GADGET_POP_RCX);
   kh_chain_q(chain, kaddr);
-  kh_chain_g(chain, KERNEL_GADGET_POP_R8);
-  kh_chain_q(chain, val);
-  kh_chain_g(chain, KERNEL_GADGET_STORE_RCX_R8);
+  kh_chain_g(chain, KERNEL_GADGET_ST_RCX_RAX);
   return chain && !chain->err ? 0 : -1;
 }
 
@@ -309,6 +335,11 @@ int kh_install(khook_t *kh, const kh_chain_t *handler)
     return -11;
   if (!kh->idt_base || !kh->tss_base)
     return -3;
+  const int fw1060 = kernel_get_fw_version() == 0x10600006;
+  if (fw1060 && (!kh->oneshot || kh->resume_rip ||
+                 !kh->resume_rsi_set || !kh->resume_rdx_set))
+    return -17;
+
 
   db_gate = kh->idt_base + 16 * KH_VEC_DB;
   ist = ist_slot_va(kh);
@@ -396,25 +427,29 @@ int kh_install(khook_t *kh, const kh_chain_t *handler)
   for (size_t i = 0; i < sizeof bigbuf; i++)
     bigbuf[i] = 0;
 
-  save_len    = 0x58;
+  save_len    = fw1060 ? 0x20 : 0x58;
   handler_len = (handler && handler->len) ? handler->len : 0;
   restore_off = save_len + handler_len;
+  if (restore_off + 0x80 > sizeof bigbuf)
+    return -6;
   slot_rdi = big + restore_off + 0x08;
   slot_rsi = big + restore_off + 0x18;
   slot_rdx = big + restore_off + 0x28;
 
   off = 0;
-  off = putq(bigbuf, off, kgadget(KERNEL_GADGET_MOV_RAX_RSI));   // rax = rsi
-  off = putq(bigbuf, off, kgadget(KERNEL_GADGET_POP_RCX));
-  off = putq(bigbuf, off, slot_rsi);
-  off = putq(bigbuf, off, kgadget(KERNEL_GADGET_ST_RCX_RAX));    // [slot_rsi] = rsi
-  off = putq(bigbuf, off, kgadget(KERNEL_GADGET_POP_RCX));
-  off = putq(bigbuf, off, slot_rdx);
-  off = putq(bigbuf, off, kgadget(KERNEL_GADGET_ST_RCX_RDX));    // [slot_rdx] = rdx
-  off = putq(bigbuf, off, kgadget(KERNEL_GADGET_MOV_RAX_RDI));   // rax = rdi
+  if (!fw1060) {
+    off = putq(bigbuf, off, kgadget(KERNEL_GADGET_MOV_RAX_RSI));
+    off = putq(bigbuf, off, kgadget(KERNEL_GADGET_POP_RCX));
+    off = putq(bigbuf, off, slot_rsi);
+    off = putq(bigbuf, off, kgadget(KERNEL_GADGET_ST_RCX_RAX));
+    off = putq(bigbuf, off, kgadget(KERNEL_GADGET_POP_RCX));
+    off = putq(bigbuf, off, slot_rdx);
+    off = putq(bigbuf, off, kgadget(KERNEL_GADGET_ST_RCX_RDX));
+  }
+  off = putq(bigbuf, off, kgadget(KERNEL_GADGET_MOV_RAX_RDI));
   off = putq(bigbuf, off, kgadget(KERNEL_GADGET_POP_RCX));
   off = putq(bigbuf, off, slot_rdi);
-  off = putq(bigbuf, off, kgadget(KERNEL_GADGET_ST_RCX_RAX));    // [slot_rdi] = rdi
+  off = putq(bigbuf, off, kgadget(KERNEL_GADGET_ST_RCX_RAX));
 
   if (handler_len) {
     for (size_t i = 0; i < handler_len; i++)
@@ -437,6 +472,15 @@ int kh_install(khook_t *kh, const kh_chain_t *handler)
 
   if (kh->write(scratch, img, sizeof img) != 0)
     return -7;
+  if (fw1060) {
+    uint8_t verify[sizeof bigbuf];
+    if (kh->read(big, verify, off) != 0 ||
+        memcmp(verify, bigbuf, off) != 0 ||
+        kh->read(scratch, verify, sizeof img) != 0 ||
+        memcmp(verify, img, sizeof img) != 0)
+      return -18;
+  }
+
 
   if (kwrite_q(kh, ist, arm_chain) != 0)
     return -8;
@@ -459,14 +503,26 @@ int kh_install(khook_t *kh, const kh_chain_t *handler)
 
 void kh_trigger(khook_t *kh)
 {
-  uint64_t resume_rsp, rbp_val;
+  uint64_t resume_rsp, rbp_val, rbx_val, r12_val, r13_val, r14_val, r15_val;
   void *resume_label = &&resumed;
 
   if (!kh || !kh->installed)
     return;
 
-  __asm__ volatile("mov %%rsp, %0" : "=r"(resume_rsp));
-  __asm__ volatile("mov %%rbp, %0" : "=r"(rbp_val));
+  __asm__ volatile("mov %%rsp, %0" : "=m"(resume_rsp));
+  __asm__ volatile("mov %%rbp, %0" : "=m"(rbp_val));
+  if (kernel_get_fw_version() == 0x10600006) {
+    __asm__ volatile("mov %%rbx, %0" : "=m"(rbx_val));
+    __asm__ volatile("mov %%r12, %0" : "=m"(r12_val));
+    __asm__ volatile("mov %%r13, %0" : "=m"(r13_val));
+    __asm__ volatile("mov %%r14, %0" : "=m"(r14_val));
+    __asm__ volatile("mov %%r15, %0" : "=m"(r15_val));
+    kwrite_q(kh, kh->scratch_base + KH_OFF_RESUME + 0x00, r15_val);
+    kwrite_q(kh, kh->scratch_base + KH_OFF_RESUME + 0x08, r14_val);
+    kwrite_q(kh, kh->scratch_base + KH_OFF_RESUME + 0x10, r13_val);
+    kwrite_q(kh, kh->scratch_base + KH_OFF_RESUME + 0x18, r12_val);
+    kwrite_q(kh, kh->scratch_base + KH_OFF_RESUME + 0x30, rbx_val);
+  }
 
   kwrite_q(kh, kh->scratch_base + KH_OFF_RESUME + KH_RC_RBP, rbp_val);
   kwrite_q(kh, kh->arm_rip_slot, (uint64_t)resume_label);

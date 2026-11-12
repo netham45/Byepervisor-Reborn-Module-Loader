@@ -1,4 +1,16 @@
 *.elf
 *.o
 *~
+break_hv_payload/break_hv.bin
 
+/phase0_smoke
+/phase1_smoke
+/phase2_smoke
+/phase3_smoke
+/phase3_hello.blob
+/phase3_blob_code.bin
+/include/phase3_blob_bytes.h
+
+/runs/
+/PLAN.md
+/OPERATOR_RUNBOOK.md

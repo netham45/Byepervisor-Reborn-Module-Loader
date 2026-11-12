@@ -159,3 +159,39 @@ uint64_t find_pte(uint64_t pmap, uint64_t va, uint64_t *out_pte)
   //   va, pte_addr, *out_pte, PDE_FIELD(*out_pte, RW), PDE_FIELD(*out_pte, EXECUTE_DISABLE), PDE_FIELD(*out_pte, USER), PDE_FIELD(*out_pte, XOTEXT));
   return pte_addr;
 }
+
+int find_mapping_leaf(uint64_t pmap, uint64_t va, uint64_t *out_address,
+                      uint64_t *out_value, unsigned *out_levels)
+{
+  uint64_t address, value;
+  if (!out_address || !out_value || !out_levels)
+    return -1;
+  address = find_pml4e(pmap, va, &value);
+  if (address == UINT64_MAX || !(value & (1ULL << PDE_PRESENT)))
+    return -1;
+  address = find_pdpe(pmap, va, &value);
+  if (address == UINT64_MAX || !(value & (1ULL << PDE_PRESENT)))
+    return -1;
+  if (value & (1ULL << PDE_PS)) {
+    *out_address = address;
+    *out_value = value;
+    *out_levels = 2;
+    return 0;
+  }
+  address = find_pde(pmap, va, &value);
+  if (address == UINT64_MAX || !(value & (1ULL << PDE_PRESENT)))
+    return -1;
+  if (value & (1ULL << PDE_PS)) {
+    *out_address = address;
+    *out_value = value;
+    *out_levels = 3;
+    return 0;
+  }
+  address = find_pte(pmap, va, &value);
+  if (address == UINT64_MAX || !(value & (1ULL << PDE_PRESENT)))
+    return -1;
+  *out_address = address;
+  *out_value = value;
+  *out_levels = 4;
+  return 0;
+}

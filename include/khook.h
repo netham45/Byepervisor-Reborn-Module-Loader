@@ -47,6 +47,7 @@ void kh_chain_init(kh_chain_t *chain, uint8_t *buf, size_t cap);
 int kh_chain_q(kh_chain_t *chain, uint64_t raw);        // push qword
 int kh_chain_g(kh_chain_t *chain, kgadget_t gadget);    // push kgadget(gadget)
 int kh_chain_store(kh_chain_t *chain, uint64_t kaddr, uint64_t val);
+int kh_chain_store_rax(kh_chain_t *chain, uint64_t kaddr);
 int kh_chain_memcpy(kh_chain_t *chain, uint64_t dst_kaddr, uint64_t src_kaddr, uint64_t n_bytes);
 int kh_chain_call(kh_chain_t *chain, uint64_t fn_kaddr, int argc, uint64_t a0, uint64_t a1, uint64_t a2);
 

@@ -56,6 +56,8 @@ uint64_t kgadget(kgadget_t gadget);
 uint64_t kdlsym(ksym_t sym);
 uint64_t rawoff(ksym_t sym);
 uint64_t kdldmap(uint64_t pa);
+// The 10.60 DMAP base is derived from the validated proc 0 pmap at startup.
+void kdset_dmap_1060(uint64_t dmap);
 uint64_t kdlpatch(kpatch_t patch);
 
 #endif // KDLSYM_H

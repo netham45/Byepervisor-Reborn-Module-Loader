@@ -51,6 +51,8 @@ uint64_t find_pml4e(uint64_t pmap, uint64_t va, uint64_t *out_pml4e);
 uint64_t find_pdpe(uint64_t pmap, uint64_t va, uint64_t *out_pdpe);
 uint64_t find_pde(uint64_t pmap, uint64_t va, uint64_t *out_pde);
 uint64_t find_pte(uint64_t pmap, uint64_t va, uint64_t *out_pte);
+int find_mapping_leaf(uint64_t pmap, uint64_t va, uint64_t *out_address,
+                      uint64_t *out_value, unsigned *out_levels);
 
 
 #endif // PAGING_H

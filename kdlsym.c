@@ -4,12 +4,21 @@
 #include "util.h"
 #include "kdlsym.h"
 
+#include "offsets/10_60.h"
+
 #include "offsets/13_00.h"
 #include "offsets/13_20.h"
 #include "offsets/13_60.h"
 
 uint64_t g_fw_version;
 uint64_t g_kernel_base = 0;
+static uint64_t g_dmap_1060;
+
+void kdset_dmap_1060(uint64_t dmap)
+{
+  g_dmap_1060 = dmap;
+}
+
 
 uint64_t ktext(uint64_t offset)
 {
@@ -23,6 +32,8 @@ uint64_t kgadget(kgadget_t gadget)
     return 0;
 
   switch(kernel_get_fw_version() & 0xffff0000) {
+  case 0x10600000:
+    return g_gadget_map_1060[gadget] ? ktext(g_gadget_map_1060[gadget]) : 0;
   case 0x13000000:
     return ktext(g_gadget_map_1300[gadget]);
   case 0x13200000:
@@ -41,6 +52,8 @@ uint64_t kdlsym(ksym_t sym)
     return 0;
 
   switch(kernel_get_fw_version() & 0xffff0000) {
+  case 0x10600000:
+    return g_sym_map_1060[sym] ? ktext(g_sym_map_1060[sym]) : 0;
   case 0x13000000:
     return ktext(g_sym_map_1300[sym]);
   case 0x13200000:
@@ -59,6 +72,8 @@ uint64_t rawoff(ksym_t sym)
     return 0;
 
   switch(kernel_get_fw_version() & 0xffff0000) {
+  case 0x10600000:
+    return g_sym_map_1060[sym];
   case 0x13000000:
     return g_sym_map_1300[sym];
   case 0x13200000:
@@ -72,6 +87,8 @@ uint64_t rawoff(ksym_t sym)
 
 uint64_t kdldmap(uint64_t pa)
 {
+  if ((kernel_get_fw_version() & 0xffff0000) == 0x10600000)
+    return g_dmap_1060 ? g_dmap_1060 + pa : 0;
   uint64_t dmpml4i = (uint64_t) kread32(kdlsym(KERNEL_SYM_DMPML4I));
   uint64_t dmpdpi  = (uint64_t) kread32(kdlsym(KERNEL_SYM_DMPDPI));
 
