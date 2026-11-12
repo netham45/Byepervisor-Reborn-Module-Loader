@@ -3,10 +3,12 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#if !defined(PHASE3_RELEASE) || !defined(PHASE3_CARRIER)
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
+#endif
 
 
 #include <ps5/kernel.h>
@@ -42,7 +44,9 @@
 #define FW_1060_IDT_OFFSET         0x3A1C300ULL
 #define FW_1060_TSS_OFFSET         0x3A1EFE0ULL
 #define FW_1060_TEXT_DATA_DISTANCE 0xCC0000ULL
+#if !defined(PHASE3_RELEASE) || !defined(PHASE3_CARRIER)
 #define FW_1060_RESULT_PORT       9633
+#endif
 #if defined(PHASE1_CARRIER)
 #define FW_1060_CARRIER_PHASE " phase=1"
 #elif defined(PHASE3_CARRIER)
@@ -182,6 +186,15 @@ static void uninstall_hook(int core_id, uint64_t cave)
 
 int send_1060_result(const char *result)
 {
+#if defined(PHASE3_RELEASE) && defined(PHASE3_CARRIER)
+  /*
+   * The release Phase 3 carrier is unattended.  Keep the shared symbol for
+   * non-reporting carrier code, but report that no transport exists rather
+   * than pretending a host collected the result.
+   */
+  (void)result;
+  return -1;
+#else
   struct sockaddr_in address = {
     .sin_family = AF_INET,
     .sin_port = htons(FW_1060_RESULT_PORT),
@@ -217,6 +230,7 @@ int send_1060_result(const char *result)
   ssize_t sent = send(client, result, length, 0);
   close(client);
   return sent == (ssize_t)length ? 0 : -1;
+#endif
 }
 #ifdef BYEPERVISOR_1060_RECOVER
 static int recover_1060_ists(void)
@@ -604,8 +618,10 @@ static int run_1060_carrier(void)
 #endif
            );
   printf("%s", message);
+#if !defined(PHASE3_RELEASE) || !defined(PHASE3_CARRIER)
   if (send_1060_result(message) != 0)
     printf("10.60 result listener was not collected\n");
+#endif
   if (result == 0)
     for (;;)
       sceKernelSleep(1);

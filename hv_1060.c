@@ -1046,7 +1046,9 @@ int hv1060_run(void)
            );
   printf("%s", arm_report);
   notifyf("Byepervisor 10.60 hook armed; enter rest mode and resume");
+#if !defined(PHASE3_RELEASE) || !defined(PHASE3_CARRIER)
   send_1060_result(arm_report);
+#endif
   for (;;) {
     r = check_results(cave, tss, saved, gate[0], gate[1]);
     if (r) return r == 1 ? 0 : r;

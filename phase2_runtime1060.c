@@ -27,6 +27,7 @@
 #define ATTACH_VECTOR_OFFSET 0x1000ULL
 #define ATTACH_TABLE_OFFSET 0x2000ULL
 
+#ifndef PHASE3_RUNTIME_EMBEDDED_RELEASE
 static int accept_client(void)
 {
   struct sockaddr_in address = {0};
@@ -53,9 +54,23 @@ static int accept_client(void)
   }
   return client;
 }
+#endif
 
 static int phase(int client, const char *name, uint64_t a, uint64_t b)
 {
+#ifdef PHASE3_RUNTIME_EMBEDDED_RELEASE
+  /*
+   * Phase 2 is included directly by the Phase 3 runtime.  In unattended
+   * Phase 3 builds this checkpoint has no remote gate: returning zero means
+   * "no checkpoint failure", not that an ACK was received.  All local
+   * predicates following phase(...) in || chains therefore still execute.
+   */
+  (void)client;
+  (void)name;
+  (void)a;
+  (void)b;
+  return 0;
+#else
   char line[224], ack;
   int n = snprintf(line, sizeof(line),
       "PHASE2_ACK %s a=%016llx b=%016llx\n", name,
@@ -63,6 +78,7 @@ static int phase(int client, const char *name, uint64_t a, uint64_t b)
   if (n <= 0 || send(client, line, (size_t)n, 0) != n)
     return -1;
   return recv(client, &ack, 1, 0) == 1 ? 0 : -1;
+#endif
 }
 
 static int copy_kernel_region(uint64_t destination, uint64_t source,
@@ -795,6 +811,7 @@ static int run_fresh(int client, uint64_t cave,
   return 0;
 }
 
+#ifndef PHASE3_RUNTIME_EMBEDDED_RELEASE
 int main(void)
 {
   int client = accept_client(), status = 1, mode = 0;
@@ -863,3 +880,4 @@ report:
   close(client);
   return status;
 }
+#endif

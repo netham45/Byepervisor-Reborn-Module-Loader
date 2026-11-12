@@ -8,9 +8,15 @@ _Static_assert(sizeof(struct sysent) == 0x30, "firmware sysent size");
 _Static_assert(offsetof(struct sysent, sy_call) == 8, "firmware sy_call offset");
 _Static_assert(offsetof(struct sysent, sy_thrcnt) == 44, "firmware sy_thrcnt offset");
 
+#ifdef PHASE3_RELEASE
+#define PHASE3_RUNTIME_EMBEDDED_RELEASE
+#endif
 #define main phase2_runtime_embedded_main
 #include "phase2_runtime1060.c"
 #undef main
+#ifdef PHASE3_RELEASE
+#undef PHASE3_RUNTIME_EMBEDDED_RELEASE
+#endif
 
 #include "phase3_module1060.h"
 #include "util.h"
@@ -21,8 +27,17 @@ _Static_assert(offsetof(struct sysent, sy_thrcnt) == 44, "firmware sy_thrcnt off
 #define PHASE3_HELLO_ROUTER_OFFSET 0x200ULL
 
 static int p3phase(int client,const char *name,uint64_t a,uint64_t b){
+#ifdef PHASE3_RELEASE
+  /*
+   * Release checkpoints are deliberately not remote gates.  Zero denotes
+   * that no checkpoint transport was attempted, not receipt of an ACK; it
+   * also leaves every subsequent local predicate in an || chain reachable.
+   */
+  (void)client;(void)name;(void)a;(void)b;return 0;
+#else
   char line[240],ack;int n=snprintf(line,sizeof(line),"PHASE3_ACK %s a=%016llx b=%016llx\n",name,(unsigned long long)a,(unsigned long long)b);
   if(n<=0||send(client,line,(size_t)n,0)!=n)return -1;return recv(client,&ack,1,0)==1?0:-1;
+#endif
 }
 static size_t build_leaf_write_handler(uint8_t out[TEMP_HANDLER_MAX],
                                        uint64_t leaf_address,
@@ -365,13 +380,46 @@ out:
       else p3phase(client,"registration-restored",m->state,m->init_calls);
     }
   }
+  /*
+   * A module that may have reached INITIALIZED or ACTIVE is never retried or
+   * unloaded here.  Cleanup is limited to restoring this process's vector
+   * and releasing its attachment when both inflight counters prove it safe.
+   */
   if(switched){
-    if(kernel_copyout(proc+g_fw1060_profile.proc_p_sysent_offset,&observed,8)||observed!=cv||kernel_copyin(&ov,proc+g_fw1060_profile.proc_p_sysent_offset,8)||kernel_copyout(proc+g_fw1060_profile.proc_p_sysent_offset,&observed,8)||observed!=ov){m->quarantined=1;g->quarantined=1;status=-1;}
-    else {switched=0;p3phase(client,"attachment-vector-restored",observed,ov);}
+    if(kernel_copyout(proc+g_fw1060_profile.proc_p_sysent_offset,&observed,8)||
+       observed!=cv||
+       kernel_copyin(&ov,proc+g_fw1060_profile.proc_p_sysent_offset,8)||
+       kernel_copyout(proc+g_fw1060_profile.proc_p_sysent_offset,&observed,8)||
+       observed!=ov){
+      m->quarantined=1;g->quarantined=1;status=-1;
+    }else{
+      switched=0;
+      p3phase(client,"attachment-vector-restored",observed,ov);
+    }
   }
-  if(committed&&!switched&&!m->inflight&&!g->inflight){if(phase2_attach_release(g,&a)||write_attachment(g->clone_address,&a)){m->quarantined=1;g->quarantined=1;status=-1;}else committed=0;}
-  if(!switched&&!committed){m->attached_proc=0;write_module(ma,m);write_global(ga,g);p3phase(client,"attachment-restored",g->attachment_count,m->inflight);}
-  if(m->quarantined||g->quarantined){g->state=PHASE2_ROUTER_QUARANTINED;write_global(ga,g);write_module(ma,m);p3phase(client,"QUARANTINED",g->generation,m->state);}
+  if(committed&&!switched){
+    if(m->inflight||g->inflight||
+       phase2_attach_release(g,&a)||
+       write_attachment(g->clone_address,&a)){
+      m->quarantined=1;g->quarantined=1;status=-1;
+    }else{
+      committed=0;
+    }
+  }
+  if(!switched&&!committed){
+    m->attached_proc=0;
+    if(write_module(ma,m)||write_global(ga,g)){
+      m->quarantined=1;g->quarantined=1;status=-1;
+    }else{
+      p3phase(client,"attachment-restored",g->attachment_count,m->inflight);
+    }
+  }
+  if(m->quarantined||g->quarantined){
+    m->quarantined=1;g->quarantined=1;status=-1;
+    g->state=PHASE2_ROUTER_QUARANTINED;
+    write_global(ga,g);write_module(ma,m);
+    p3phase(client,"QUARANTINED",g->generation,m->state);
+  }
   return status;
 }
 
@@ -528,8 +576,16 @@ static int p3_resume(int client,const phase2_locator_t *locator,
 }
 
 int main(void){
-  int client=accept_client(),status=1,blob_fd=-1;uint64_t cave;runtime_exec1060_page_t page;phase2_prealloc_record_t pre;phase2_locator_t locator;phase2_router_global_t g;phase3_module_state_t m;char line[640];struct stat blob_stat;uint8_t *flat=MAP_FAILED;size_t flat_size=0;
-  if(client<0)return 1;memset(&page,0,sizeof(page));memset(&pre,0,sizeof(pre));memset(&locator,0,sizeof(locator));memset(&g,0,sizeof(g));memset(&m,0,sizeof(m));cave=kdlsym(KERNEL_SYM_DATA_CAVE);
+#ifdef PHASE3_RELEASE
+  int client=-1,status=1,blob_fd=-1;
+#else
+  int client=accept_client(),status=1,blob_fd=-1;
+#endif
+  uint64_t cave;runtime_exec1060_page_t page;phase2_prealloc_record_t pre;phase2_locator_t locator;phase2_router_global_t g;phase3_module_state_t m;char line[640];struct stat blob_stat;uint8_t *flat=MAP_FAILED;size_t flat_size=0;
+#ifndef PHASE3_RELEASE
+  if(client<0)return 1;
+#endif
+  memset(&page,0,sizeof(page));memset(&pre,0,sizeof(pre));memset(&locator,0,sizeof(locator));memset(&g,0,sizeof(g));memset(&m,0,sizeof(m));cave=kdlsym(KERNEL_SYM_DATA_CAVE);
   if(fw1060_identity_validate(kernel_get_fw_version(),sceKernelGetMainSocId(),FW1060_CPU_COUNT)||!cave||p3phase(client,"profile-preflight",g_fw1060_profile.firmware,((uint64_t)PHASE3_INIT_SYSCALL<<32)|PHASE3_HELLO_SYSCALL)){status=10;goto report;}
   if(p3_stock_preflight(client)){status=13;goto report;}
   blob_fd=open(PHASE3_BLOB_PATH,O_RDONLY);
@@ -563,5 +619,10 @@ report:
   if(flat!=MAP_FAILED)munmap(flat,flat_size);
   if(cave&&!kernel_copyout(cave+PHASE2_LOCATOR_OFFSET,&locator,sizeof(locator))&&!phase2_locator_validate(&locator)){kernel_copyout(locator.global_address,&g,sizeof(g));kernel_copyout(locator.global_address+PHASE3_MODULE_OFFSET,&m,sizeof(m));}
   snprintf(line,sizeof(line),"PHASE3_RESULT status=%d pid=%d generation=%016llx router_state=%u module_state=%u init_calls=%llu hello_calls=%llu attachments=%u router_inflight=%u module_inflight=%u quarantined=%u retained=%016llx locator=%016llx last=terminal\n",status,getpid(),(unsigned long long)m.generation,g.state,m.state,(unsigned long long)m.init_calls,(unsigned long long)m.hello_calls,g.attachment_count,g.inflight,m.inflight,g.quarantined||m.quarantined,(unsigned long long)m.image_address,(unsigned long long)locator.global_address);
-  send(client,line,strlen(line),0);close(client);return status;
+#ifndef PHASE3_RELEASE
+  send(client,line,strlen(line),0);close(client);
+#else
+  printf("%s",line);
+#endif
+  return status;
 }

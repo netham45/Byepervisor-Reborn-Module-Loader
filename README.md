@@ -6,10 +6,10 @@ This fork implements a small retained module loader for a regular retail PS5 on 
 
 1. `phase3_hello_blob.S` compiles into 47 bytes of position-independent demo code with init and dispatch entry points.
 2. `build_phase3_blob.py` places that code in a 64 MiB v1 file whose mapped module image is also 64 MiB.
-3. `phase3_carrier.elf` opens and validates the target blob, then derives retained code/state allocation sizes from its declared image size.
-4. It prepares and journals one mapping leaf for every page in the rounded router-plus-image code allocation.
-5. `phase3_runtime.elf` validates the file and journal, then copies and reads back the complete 64 MiB image in kernel memory.
-6. The runtime changes all journaled code-region pages to RX, synchronizes visibility, and re-walks every mapping before publication.
+3. `byepervisor_reborn.elf` is the retail 10.60 release carrier; `phase3_carrier.elf` keeps the attended/demo protocol.
+4. The carrier validates the target blob and journals one mapping leaf for every page in the rounded router-plus-image allocation.
+5. `phase3_runtime_release.elf` is the release runtime; `phase3_runtime.elf` is its attended/demo counterpart.
+6. The runtime copies and reads back the complete image, changes every code-region page to RX, synchronizes visibility, and re-walks every mapping.
 7. It clones the current process's syscall vector and all 734 syscall entries; the stock global objects are not edited.
 8. Private syscall 500 runs module init once; only after success does private syscall 504 become the hello dispatcher.
 9. The hello handler returns errno in `EAX` and writes its application value to the current thread's `td_retval[0]`.
@@ -17,7 +17,7 @@ This fork implements a small retained module loader for a regular retail PS5 on 
 
 **The shipped Phase 3 artifact is literal:** the produced disk file is exactly 67,108,864 bytes; the mapped module image is independently exactly 67,108,864 bytes; the segment copies 67,108,656 file-backed bytes from file offset 208 and zeroes the remaining 208 image bytes as BSS. For this image, `phase3_prealloc_layout()` derives 67,112,960 bytes of code backing (a 4 KiB router page plus the image), 16,385 code pages, a 393,264-byte journal, and 401,408 bytes (`0x62000`, 392 KiB) of state backing. The runtime populates and reads back every shipped-image page, then verifies every final RX mapping. These values are derived from this producer's image, not format or carrier maxima.
 
-**Live status:** an attended run on a regular retail 10.60 system completed with `PHASE3_RESULT status=0` and was accepted. It exercised the exact 64 MiB file and image, blob-derived retained layout, complete image copy/zero readback, journal validation, all-page RX publication and re-walk, init/hello dispatch and return value, original process-vector restoration, zero final attachments/inflight, and retained pinned state. The run's `notification-displayed` milestone was a machine protocol acknowledgment accepted for this test; it is not a claim that a person visually observed the notification.
+**Live status:** an attended run on a regular retail 10.60 system completed with `PHASE3_RESULT status=0` and was accepted. It exercised the exact 64 MiB file and image, blob-derived retained layout, complete image copy/zero readback, journal validation, all-page RX publication and re-walk, init/hello dispatch and return value, original process-vector restoration, zero final attachments/inflight, and retained pinned state. The run's `notification-displayed` milestone was a machine protocol acknowledgment accepted for that interactive test; it is not a claim that a person visually observed the notification. That run used the prior Payload Manager blob path and the attended listener protocol. It does not validate `byepervisor_reborn.elf`, `phase3_runtime_release.elf`, or the new `/data/byepervisor/module-loader/phase3_hello.blob` placement.
 
 ```mermaid
 flowchart LR
@@ -59,17 +59,30 @@ The output in the working tree is:
 `phase3_hello.blob` and the intermediate `phase3_blob_code.bin` are generated
 and ignored by Git. `make -B phase3_hello.blob` recreates both from source.
 
-The carrier and runtime do not use that host path directly. Both require a separately placed file at exactly:
+The carrier and runtime do not use that host path directly. Both open the same
+separately placed console file at exactly:
 
 ```text
-/data/pldmgr/payloads/phase3-hello/phase3-hello-64m.blob
+/data/byepervisor/module-loader/phase3_hello.blob
 ```
 
-Both reject a nonpositive or non-`size_t`-representable file length and validate the mapped v1 blob. Before allocation, the carrier maps it read-only, extracts `image_size`, and calls `phase3_prealloc_prepare()`. The runtime later maps it privately read/write for its digest-negative check and revalidates it. `phase3_prealloc_layout()` checked-rounds `0x1000 + image_size` to a code allocation, creates one journal entry per code page, and checked-rounds state offset `0x1000` plus the flexible journal to a state allocation. No fixed format, file, image, or carrier-capacity maximum is encoded; checked arithmetic, `size_t` representability, allocation success, and safe page mappings are the limits.
+Place this ordinary data file outside Payload Manager before executing the
+carrier, and leave it unchanged at that path through resume and runtime
+execution. The carrier reads it before rest/resume; the runtime opens the same
+file afterward. Both reject a nonpositive or non-`size_t`-representable file
+length and validate the mapped v1 blob. Before allocation, the carrier maps it
+read-only, extracts `image_size`, and calls `phase3_prealloc_prepare()`. The
+runtime later maps it privately read/write for its digest-negative check and
+revalidates it. `phase3_prealloc_layout()` checked-rounds `0x1000 + image_size`
+to a code allocation, creates one journal entry per code page, and
+checked-rounds state offset `0x1000` plus the flexible journal to a state
+allocation. No fixed format, file, image, or carrier-capacity maximum is
+encoded; checked arithmetic, `size_t` representability, allocation success,
+and safe page mappings are the limits.
 
 ### 2. Prepare retained backing before resume
 
-The Phase 3 carrier is built with the Phase 2 carrier path because Phase 3 reuses Phase 2 ownership and attachment infrastructure. Before the transition, it requests three typed allocations:
+The release carrier is `byepervisor_reborn.elf`; the attended/demo carrier is `phase3_carrier.elf`. Both are built with the Phase 2 carrier path because Phase 3 reuses Phase 2 ownership and attachment infrastructure. Before the transition, either carrier requests three typed allocations:
 
 | Backing | Allocation rule | Shipped 64 MiB image |
 | --- | --- | ---: |
@@ -83,7 +96,7 @@ Phase 0 establishes the firmware/profile, mapping, temporary-call, and publicati
 
 ### 3. Discover or install after resume
 
-`phase3_runtime.elf` first validates the exact retail 10.60 identity and the stock syscall baseline. It then reads the retained locator:
+`phase3_runtime_release.elf`, or `phase3_runtime.elf` in an attended/demo run, first validates the exact retail 10.60 identity and the stock syscall baseline. It then reads the retained locator:
 
 - A zero locator selects `p3_install()`: revalidate the blob, recompute code/state/page/journal sizes with `phase3_prealloc_layout()`, require an exact match with the carrier record, load the image, publish the locator, then attach and run.
 - A valid nonzero locator selects `p3_resume()`: rediscover an existing LIVE Phase 2 router and a PREPARED Phase 3 module with matching generations, image identity, and digest.
@@ -160,20 +173,73 @@ The retained router, module image, state, and clone allocation remain pinned. A 
 | [phase3_hello_blob.S](phase3_hello_blob.S) | Demo module callbacks |
 | [build_phase3_blob.py](build_phase3_blob.py) | Exact v1 demo producer |
 | [phase0_smoke.c](phase0_smoke.c) through [phase3_smoke.c](phase3_smoke.c) | Offline contract tests |
-| [Makefile](Makefile) | Payload, carrier/runtime, blob, and host-smoke targets |
+| [Makefile](Makefile) | Main release carrier, attended carriers/runtimes, release runtime, separate blob, and host-smoke targets |
 
 `phase3_runtime1060.c` includes `phase2_runtime1060.c` with its `main` renamed. Changes to the shared static helpers therefore affect both runtimes.
 
-## Build and offline smoke tests
+## Build artifacts and offline smoke tests
 
-The Makefile requires the [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) at parse time, even for host-smoke targets. It also uses Python 3, the SDK compiler/objcopy tools, and `HOST_CC` (default `cc`). From this directory:
+The Makefile requires the [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk)
+at parse time, even for host-smoke targets. It also uses Python 3, the SDK
+compiler/objcopy tools, and `HOST_CC` (default `cc`). From this directory:
 
 ```sh
 export PS5_PAYLOAD_SDK=/path/to/ps5-payload-sdk
-make -B all
+make release
 ```
 
-`all` builds `byepervisor_reborn.elf`, Phase 0, Phase 1–3 carrier/runtime ELFs, and `phase3_hello.blob`. To run the four offline smoke suites independently:
+`make release` builds exactly these three separately deployable files:
+
+| Artifact | Role |
+| --- | --- |
+| `byepervisor_reborn.elf` | Main retail 10.60 Phase 3 release carrier, built from the attended Phase 3 carrier flags and sources plus `PHASE3_RELEASE` |
+| `phase3_runtime_release.elf` | Post-resume Phase 3 runtime built with `PHASE3_RELEASE` |
+| `phase3_hello.blob` | Separate 64 MiB module file required by both process stages |
+
+`PHASE3_RELEASE` changes only the retail 10.60 Phase 3 carrier/runtime paths;
+the existing main path for other firmware remains unchanged. The release
+target does not deploy, execute, or combine its three outputs.
+
+The two ELFs are both required because they execute in different process
+stages. The carrier validates the blob and prepares retained backing before
+rest/resume. After the transition, a fresh runtime process discovers that
+backing, installs or resumes the module, and attaches its own cloned syscall
+vector. One ELF cannot replace the other stage.
+
+Place `phase3_hello.blob` as an ordinary file outside Payload Manager at:
+
+```text
+/data/byepervisor/module-loader/phase3_hello.blob
+```
+
+Do this before starting the carrier, and leave the file unchanged through the
+runtime. The release sequence is:
+
+1. Execute `byepervisor_reborn.elf`.
+2. Complete the rest/resume transition.
+3. Execute `phase3_runtime_release.elf`.
+
+The release carrier and runtime do not open external phase/result network
+listeners and do not wait for listener acknowledgments. Release mode retains
+the local firmware and stock-syscall preflight, blob and digest validation,
+allocation/journal checks, complete image copy/zero readback, RX publication
+and mapping re-walk, syscall-clone verification, init/hello return checks, and
+vector restoration checks.
+
+The explicit `phase3_carrier.elf` and `phase3_runtime.elf` targets remain the
+interactive attended/demo pair and retain their listener protocol. Phase 0,
+Phase 1, and Phase 2 demo carrier/runtime targets also remain explicit.
+
+Bare `make`/`make all` builds the main release carrier, both Phase 3 runtimes,
+the attended Phase 3 carrier, the Phase 0-2 demos, and the separate blob. It
+only builds files; it does not deploy or execute any target. The legacy
+`make test` and `make debug` commands now fail immediately without making a
+network connection. This deliberately removes their old deployment/debugging
+convenience because the traditional `byepervisor_reborn.elf` name now denotes
+a mutating Phase 3 release carrier; operators must choose and deploy an
+explicit artifact.
+
+To run the four offline smoke suites independently:
 
 ```sh
 make -B host-smoke
@@ -182,7 +248,9 @@ make -B phase2-host-smoke
 make -B phase3-host-smoke
 ```
 
-Run the Phase 3 command from this directory because `phase3_smoke` opens `./phase3_hello.blob`. The smoke targets build and execute host programs; `make test` is different and invokes SDK network deployment. `make debug` also contacts a target.
+Run the Phase 3 smoke command from this directory because `phase3_smoke` opens
+`./phase3_hello.blob`. The smoke targets build and execute host programs; they
+are not part of `release`.
 
 | Smoke | Main contracts exercised offline |
 | --- | --- |

@@ -16,7 +16,7 @@
 #define PHASE3_OPERATION_HELLO 2U
 #define PHASE3_HELLO_RESULT 0x0301060a11ULL
 #define PHASE3_BLOB_IMAGE_OFFSET 0x1000ULL
-#define PHASE3_BLOB_PATH "/data/pldmgr/payloads/phase3-hello/phase3-hello-64m.blob"
+#define PHASE3_BLOB_PATH "/data/byepervisor/module-loader/phase3_hello.blob"
 #define PHASE3_BLOB_MAX_SEGMENTS 8U
 #define PHASE3_BLOB_MAX_SYSCALLS 8U
 #define PHASE3_SEG_R 1U

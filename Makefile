@@ -14,9 +14,6 @@
 # along with this program; see the file COPYING. If not see
 # <http://www.gnu.org/licenses/>.
 
-PS5_HOST ?= ps5
-PS5_PORT ?= 9021
-
 ifdef PS5_PAYLOAD_SDK
     include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 else
@@ -34,23 +31,30 @@ PHASE2_RUNTIME_ELF := phase2_runtime.elf
 PHASE2_HOST_SMOKE := phase2_smoke
 PHASE3_CARRIER_ELF := phase3_carrier.elf
 PHASE3_RUNTIME_ELF := phase3_runtime.elf
+PHASE3_RUNTIME_RELEASE_ELF := phase3_runtime_release.elf
 PHASE3_HOST_SMOKE := phase3_smoke
 PHASE3_BLOB := phase3_hello.blob
-PHASE3_BLOB_EMBED := phase3_hello_blob.o
 HOST_CC ?= cc
+
+PHASE3_CARRIER_FLAGS := -DBYEPERVISOR_1060_ARM -DPHASE2_CARRIER -DPHASE3_CARRIER
+PHASE3_CARRIER_SOURCES := main.c kdlsym.c khook.c paging.c util.c hv_1060.c firmware_profile1060.c page_publication1060.c phase2_router1060.c phase3_module1060.c
+PHASE3_RUNTIME_DEPS := phase3_runtime1060.c phase2_runtime1060.c phase3_module1060.c phase2_router1060.c kdlsym.c paging.c util.c firmware_profile1060.c
+PHASE3_RUNTIME_SOURCES := phase3_runtime1060.c phase3_module1060.c phase2_router1060.c kdlsym.c paging.c util.c firmware_profile1060.c
 
 PAYLOAD_DIR := break_hv_payload
 PAYLOAD_HDR := $(PAYLOAD_DIR)/break_hv.h
 
 CFLAGS := -Wall -Werror -Wno-unused-function -g -I./include
 
-all: $(ELF) $(PHASE0_ELF) $(PHASE1_CARRIER_ELF) $(PHASE1_RUNTIME_ELF) $(PHASE2_CARRIER_ELF) $(PHASE2_RUNTIME_ELF) $(PHASE3_CARRIER_ELF) $(PHASE3_RUNTIME_ELF) $(PHASE3_BLOB)
+.PHONY: all release clean test debug host-smoke phase1-host-smoke phase2-host-smoke phase3-host-smoke
+
+all: $(ELF) $(PHASE0_ELF) $(PHASE1_CARRIER_ELF) $(PHASE1_RUNTIME_ELF) $(PHASE2_CARRIER_ELF) $(PHASE2_RUNTIME_ELF) $(PHASE3_CARRIER_ELF) $(PHASE3_RUNTIME_ELF) $(PHASE3_RUNTIME_RELEASE_ELF) $(PHASE3_BLOB)
 
 $(PAYLOAD_HDR): $(PAYLOAD_DIR)/break_hv.c $(PAYLOAD_DIR)/entry.S $(PAYLOAD_DIR)/link.ld
 	sh $(PAYLOAD_DIR)/build.sh
 
-$(ELF): $(PAYLOAD_HDR) main.c kdlsym.c khook.c paging.c util.c hv_1060.c firmware_profile1060.c page_publication1060.c
-	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
+$(ELF): $(PAYLOAD_HDR) $(PHASE3_CARRIER_SOURCES)
+	$(CC) $(CFLAGS) $(PHASE3_CARRIER_FLAGS) -DPHASE3_RELEASE -o $@ $(filter %.c,$^)
 
 $(PHASE0_ELF): runtime_syscall1060.c kdlsym.c paging.c util.c firmware_profile1060.c page_publication1060.c
 	$(CC) $(CFLAGS) -o $@ $^ -lpthread
@@ -73,18 +77,17 @@ phase3_blob_code.bin: phase3_blob_code.o
 	$(OBJCOPY) -j .text -O binary $< $@
 $(PHASE3_BLOB): phase3_blob_code.bin build_phase3_blob.py
 	./build_phase3_blob.py phase3_blob_code.bin $@
-$(PHASE3_BLOB_EMBED): $(PHASE3_BLOB)
-	$(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 $< $@
 
-$(PHASE3_CARRIER_ELF): CFLAGS += -DBYEPERVISOR_1060_ARM -DPHASE2_CARRIER -DPHASE3_CARRIER
-$(PHASE3_CARRIER_ELF): $(PAYLOAD_HDR) main.c kdlsym.c khook.c paging.c util.c hv_1060.c firmware_profile1060.c page_publication1060.c phase2_router1060.c phase3_module1060.c
-	$(CC) $(CFLAGS) -o $@ $(filter %.c,$^)
+$(PHASE3_CARRIER_ELF): $(PAYLOAD_HDR) $(PHASE3_CARRIER_SOURCES)
+	$(CC) $(CFLAGS) $(PHASE3_CARRIER_FLAGS) -o $@ $(filter %.c,$^)
 
-$(PHASE3_RUNTIME_ELF): phase3_runtime1060.c phase2_runtime1060.c phase3_module1060.c phase2_router1060.c kdlsym.c paging.c util.c firmware_profile1060.c $(PHASE3_BLOB)
-	$(CC) $(CFLAGS) -o $@ phase3_runtime1060.c phase3_module1060.c phase2_router1060.c kdlsym.c paging.c util.c firmware_profile1060.c
+$(PHASE3_RUNTIME_ELF): $(PHASE3_RUNTIME_DEPS)
+	$(CC) $(CFLAGS) -o $@ $(PHASE3_RUNTIME_SOURCES)
 
+$(PHASE3_RUNTIME_RELEASE_ELF): $(PHASE3_RUNTIME_DEPS)
+	$(CC) $(CFLAGS) -DPHASE3_RELEASE -o $@ $(PHASE3_RUNTIME_SOURCES)
 
-
+release: $(ELF) $(PHASE3_RUNTIME_RELEASE_ELF) $(PHASE3_BLOB)
 
 $(HOST_SMOKE): phase0_smoke.c firmware_profile1060.c page_publication1060.c
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -I./include -o $@ $^
@@ -109,18 +112,10 @@ phase3-host-smoke: $(PHASE3_HOST_SMOKE)
 
 
 clean:
-	rm -f $(ELF) $(PHASE0_ELF) $(PHASE1_CARRIER_ELF) $(PHASE1_RUNTIME_ELF) $(PHASE2_CARRIER_ELF) $(PHASE2_RUNTIME_ELF) $(PHASE3_CARRIER_ELF) $(PHASE3_RUNTIME_ELF) $(HOST_SMOKE) $(PHASE1_HOST_SMOKE) $(PHASE2_HOST_SMOKE) $(PHASE3_HOST_SMOKE)
-	rm -f $(PHASE3_BLOB) $(PHASE3_BLOB_EMBED) phase3_blob_code.o phase3_blob_code.bin
+	rm -f $(ELF) $(PHASE0_ELF) $(PHASE1_CARRIER_ELF) $(PHASE1_RUNTIME_ELF) $(PHASE2_CARRIER_ELF) $(PHASE2_RUNTIME_ELF) $(PHASE3_CARRIER_ELF) $(PHASE3_RUNTIME_ELF) $(PHASE3_RUNTIME_RELEASE_ELF) $(HOST_SMOKE) $(PHASE1_HOST_SMOKE) $(PHASE2_HOST_SMOKE) $(PHASE3_HOST_SMOKE)
+	rm -f $(PHASE3_BLOB) phase3_hello_blob.o phase3_blob_code.o phase3_blob_code.bin
 	rm -f $(PAYLOAD_DIR)/break_hv.h $(PAYLOAD_DIR)/break_hv.bin $(PAYLOAD_DIR)/break_hv.elf $(PAYLOAD_DIR)/*.o
 
-test: $(ELF)
-	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $^
-
-debug: $(ELF)
-	gdb-multiarch \
-	-ex "set architecture i386:x86-64" \
-	-ex "target extended-remote $(PS5_HOST):2159" \
-	-ex "file $(ELF)" \
-	-ex "remote put $(ELF) /data/$(ELF)" \
-	-ex "set remote exec-file /data/$(ELF)" \
-	-ex "start"
+test debug:
+	@echo "$@ is disabled: $(ELF) is the mutating Phase 3 release carrier; build or deploy an explicit artifact instead." >&2
+	@false
