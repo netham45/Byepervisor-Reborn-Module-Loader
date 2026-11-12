@@ -2,6 +2,43 @@
 
 This fork implements a small retained module loader for a regular retail PS5 on firmware 10.60. A **carrier** runs before and across the rest/resume transition so kernel allocations survive it; a fresh **runtime** process finds those allocations afterward, validates a separate position-independent **blob**, and exposes the blob only to that process through a cloned syscall table. Syscalls 500 and 504 provide a controlled init/hello demonstration without changing the global table.
 
+## Human writeup
+
+I got byepervisor working on 10.60 by asking GPT what it was missing and going "Hey can't we copy the missing bits from that ps5 linux project?" and about 30 minutes later it was done
+
+Past that, clanker and I did a bunch of poking over the last couple days at the syscall handler while deriving a method to implement/override syscalls per-process
+
+Full lifecycle:
+
+* run loader
+* loader checks blob to get file size and uses khook rop to allocate enough pages for the blob in kernelville
+* allocated pages are stored to a known address in a cave
+* byepervisor arms like normal
+* rest
+* wake - modified HV payload runs normal byepervisor and also sets all pages marked in cave as +x
+* normal operation resumes
+* syscall dispatcher hook:
+*   clone the system syscall dispatch table
+*   clear absent flags/point unused syscalls to an unused thunk we can overwrite that the syscall dispatcher will willingly call
+*   modify thunk, flush tlb -- the pages the syscall dispatcher will jump to are all .text so the console has to be byepervised first
+*   set thunk to jump to code we allocated on our own pages to handle dispatch and/or fall through to global handler
+* run a process
+* change the process's syscall dispatch table to our own with existing tools
+* call syscalls, they go through a custom dispatch table to our custom thunk to our custom dispatcher
+
+byepervisor is required for this for two reasons: editing .text is required to utilize the syscall dispatcher and allocating kernel pages as +x is only possible from the hypervisor
+
+Future plans (maybe):
+
+* Module unloading
+* Loading multiple modules and chaining dispatchers
+* Dynamic/Non-PIC loader
+
+Code is all AI, I didn't review a single character of it.
+
+Only tested on 10.60.
+
+
 ## Ten-line orientation
 
 1. `phase3_hello_blob.S` compiles into 47 bytes of position-independent demo code with init and dispatch entry points.
