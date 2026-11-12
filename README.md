@@ -18,10 +18,10 @@ Full lifecycle:
 * wake - modified HV payload runs normal byepervisor and also sets all pages marked in cave as +x
 * normal operation resumes
 * syscall dispatcher hook:
-*   clone the system syscall dispatch table
-*   clear absent flags/point unused syscalls to an unused thunk we can overwrite that the syscall dispatcher will willingly call
-*   modify thunk, flush tlb -- the pages the syscall dispatcher will jump to are all .text so the console has to be byepervised first
-*   set thunk to jump to code we allocated on our own pages to handle dispatch and/or fall through to global handler
+  * clone the system syscall dispatch table
+  * clear absent flags/point unused syscalls to an unused thunk we can overwrite that the syscall dispatcher will willingly call
+  * modify thunk, flush tlb -- the pages the syscall dispatcher will jump to are all .text so the console has to be byepervised first
+  * set thunk to jump to code we allocated on our own pages to handle dispatch and/or fall through to global handler
 * run a process
 * change the process's syscall dispatch table to our own with existing tools
 * call syscalls, they go through a custom dispatch table to our custom thunk to our custom dispatcher
